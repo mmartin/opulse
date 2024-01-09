@@ -1,0 +1,11 @@
+(library
+ (name opulse)
+ (public_name opulse)
+ (flags -g :standard -cclib -lpulse)
+ (preprocess
+  (pps
+   ppx_deriving.enum
+   ppx_deriving.show
+   ppx_deriving.make
+   ))
+ (libraries core ctypes-foreign))
