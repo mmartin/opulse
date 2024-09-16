@@ -306,7 +306,7 @@ let pa_context_get_sink_input_info_list =
 
 let pa_context_success_cb_t = pa_context @-> int @-> ptr void @-> returning void
 
-type pa_subscription_mask_t = [ `PA_SUBSCRIPTION_MASK_SINK_INPUT [@value 0x0004U] ]
+type pa_subscription_mask_t = [ `PA_SUBSCRIPTION_MASK_SINK_INPUT [@value 0x0004] ]
 [@@deriving enum, show { with_path = false }]
 
 let pa_subscription_mask_t =
@@ -317,13 +317,13 @@ let pa_subscription_mask_t =
 ;;
 
 module Pa_subscription_event_type = struct
-  type facility_t = [ `PA_SUBSCRIPTION_EVENT_SINK_INPUT [@value 0x0002U] ]
+  type facility_t = [ `PA_SUBSCRIPTION_EVENT_SINK_INPUT [@value 0x0002] ]
   [@@deriving enum, show { with_path = false }]
 
   type event_type_t =
-    [ `PA_SUBSCRIPTION_EVENT_NEW [@value 0x0000U]
-    | `PA_SUBSCRIPTION_EVENT_CHANGE [@value 0x0010U]
-    | `PA_SUBSCRIPTION_EVENT_REMOVE [@value 0x0020U]
+    [ `PA_SUBSCRIPTION_EVENT_NEW [@value 0x0000]
+    | `PA_SUBSCRIPTION_EVENT_CHANGE [@value 0x0010]
+    | `PA_SUBSCRIPTION_EVENT_REMOVE [@value 0x0020]
     ]
   [@@deriving enum, show { with_path = false }]
 
