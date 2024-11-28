@@ -34,7 +34,7 @@ let connect client_name =
   { mainloop; context }
 ;;
 
-let rec wait_for_operation pulse operation =
+let wait_for_operation pulse operation =
   match operation with
   | Some operation ->
     let rec loopy_loop () =
@@ -60,7 +60,7 @@ let context_success_cb pulse ok _ success _ =
 ;;
 
 let read_proplist proplist =
-  let state = allocate_n ~count:1 (ptr void) in
+  let state = allocate (ptr void) null in
   let rec loop map =
     match Bindings.pa_proplist_iterate proplist state with
     | Some key ->
@@ -94,16 +94,19 @@ let transform_sink_input_info info =
 let get_sink_input_by_index pulse index =
   Bindings.pa_threaded_mainloop_lock pulse.mainloop;
   let result = ref None in
+  let op_callback _ info eol _ =
+    if eol = 0 then result := Some (transform_sink_input_info info);
+    Bindings.pa_threaded_mainloop_signal pulse.mainloop 0
+  in
   let operation =
     Bindings.pa_context_get_sink_input_info
       pulse.context
       (Unsigned.UInt32.of_int index)
-      (fun _ info eol _ ->
-        if eol = 0 then result := Some (transform_sink_input_info info);
-        Bindings.pa_threaded_mainloop_signal pulse.mainloop 0)
+      op_callback
       null
   in
   wait_for_operation pulse operation;
+  Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
   !result
 ;;
@@ -111,15 +114,15 @@ let get_sink_input_by_index pulse index =
 let get_sink_input_list pulse =
   Bindings.pa_threaded_mainloop_lock pulse.mainloop;
   let result = ref [] in
+  let op_callback _ info eol _ =
+    if eol = 0 then result := transform_sink_input_info info :: !result;
+    Bindings.pa_threaded_mainloop_signal pulse.mainloop 0
+  in
   let operation =
-    Bindings.pa_context_get_sink_input_info_list
-      pulse.context
-      (fun _ info eol _ ->
-        if eol = 0 then result := transform_sink_input_info info :: !result;
-        Bindings.pa_threaded_mainloop_signal pulse.mainloop 0)
-      null
+    Bindings.pa_context_get_sink_input_info_list pulse.context op_callback null
   in
   wait_for_operation pulse operation;
+  Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
   !result
 ;;
@@ -127,23 +130,26 @@ let get_sink_input_list pulse =
 let set_sink_input_volume pulse index ~volume ~channels =
   Bindings.pa_threaded_mainloop_lock pulse.mainloop;
   let volume = Float.(to_int (volume * of_int 0x10000)) in
-  let cvolume = allocate_n ~count:1 Bindings.Pa_cvolume.t in
-  let cvolume =
+  let cvolume = make Bindings.Pa_cvolume.t in
+  let _ = Bindings.pa_cvolume_init (addr cvolume) in
+  let _ =
     Bindings.pa_cvolume_set
-      cvolume
+      (addr cvolume)
       (Unsigned.UInt.of_int channels)
       (Unsigned.UInt32.of_int volume)
   in
   let success = ref false in
+  let op_callback = context_success_cb pulse success in
   let operation =
     Bindings.pa_context_set_sink_input_volume
       pulse.context
       (Unsigned.UInt32.of_int index)
-      cvolume
-      (context_success_cb pulse success)
+      (addr cvolume)
+      op_callback
       null
   in
   wait_for_operation pulse operation;
+  Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
   if not !success then raise (Pulse_error "Failed to set sink input volume")
 ;;
@@ -151,36 +157,38 @@ let set_sink_input_volume pulse index ~volume ~channels =
 let set_sink_input_mute pulse index mute =
   Bindings.pa_threaded_mainloop_lock pulse.mainloop;
   let success = ref false in
+  let op_callback = context_success_cb pulse success in
   let operation =
     Bindings.pa_context_set_sink_input_mute
       pulse.context
       (Unsigned.UInt32.of_int index)
       mute
-      (context_success_cb pulse success)
+      op_callback
       null
   in
   wait_for_operation pulse operation;
+  Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
   if not !success then raise (Pulse_error "Failed to set sink input mute")
 ;;
 
+let event_callback = ref (fun _ _ _ _ -> ())
+
 let subscribe pulse callback =
   Bindings.pa_threaded_mainloop_lock pulse.mainloop;
-  Bindings.pa_context_set_subscribe_callback
-    pulse.context
-    (fun _ (f, e) idx _ ->
-      callback f e (Unsigned.UInt32.to_int idx);
-      Bindings.pa_threaded_mainloop_signal pulse.mainloop 0)
-    null;
+  (event_callback := fun _ (f, e) idx _ -> callback f e (Unsigned.UInt32.to_int idx));
+  Bindings.pa_context_set_subscribe_callback pulse.context !event_callback null;
   let success = ref false in
+  let op_callback = context_success_cb pulse success in
   let operation =
     Bindings.pa_context_subscribe
       pulse.context
       `PA_SUBSCRIPTION_MASK_SINK_INPUT
-      (context_success_cb pulse success)
+      op_callback
       null
   in
   wait_for_operation pulse operation;
+  Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
   if not !success then raise (Pulse_error "Failed to subscribe")
 ;;

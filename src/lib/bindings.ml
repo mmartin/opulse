@@ -222,6 +222,10 @@ module Pa_cvolume = struct
   let () = seal t
 end
 
+let pa_cvolume_init =
+  foreign "pa_cvolume_init" (ptr Pa_cvolume.t @-> returning (ptr Pa_cvolume.t))
+;;
+
 let pa_cvolume_set =
   foreign
     "pa_cvolume_set"
