@@ -35,12 +35,23 @@ let connect client_name =
 ;;
 
 let rec wait_for_operation pulse operation =
-  match Bindings.pa_operation_get_state operation with
-  | `PA_OPERATION_DONE -> Bindings.pa_operation_unref operation
-  | `PA_OPERATION_RUNNING ->
-    Bindings.pa_threaded_mainloop_wait pulse.mainloop;
-    (wait_for_operation [@tailcall]) pulse operation
-  | `PA_OPERATION_CANCELLED -> failwith "OP got cancelled"
+  match operation with
+  | Some operation ->
+    let rec loopy_loop () =
+      match Bindings.pa_operation_get_state operation with
+      | `PA_OPERATION_DONE -> Bindings.pa_operation_unref operation
+      | `PA_OPERATION_RUNNING ->
+        Bindings.pa_threaded_mainloop_wait pulse.mainloop;
+        (loopy_loop [@tailcall]) ()
+      | `PA_OPERATION_CANCELLED ->
+        Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
+        raise @@ Pulse_error "Operation got cancelled"
+    in
+    loopy_loop ()
+  | None ->
+    let error = Bindings.pa_context_errno pulse.context |> Bindings.pa_strerror in
+    Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
+    raise @@ Pulse_error ("Failed to execute operation: " ^ error)
 ;;
 
 let context_success_cb pulse ok _ success _ =

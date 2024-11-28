@@ -49,6 +49,13 @@ let pa_threaded_mainloop_signal =
     (pa_threaded_mainloop @-> int @-> returning void)
 ;;
 
+let pa_threaded_mainloop_accept =
+  foreign
+    ~release_runtime_lock:true
+    "pa_threaded_mainloop_accept"
+    (pa_threaded_mainloop @-> returning void)
+;;
+
 let pa_threaded_mainloop_get_api =
   foreign
     "pa_threaded_mainloop_get_api"
@@ -65,6 +72,8 @@ let pa_context_connect =
     (pa_context @-> ptr void @-> int @-> ptr void @-> returning int)
 ;;
 
+let pa_context_errno = foreign "pa_context_errno" (pa_context @-> returning int)
+let pa_strerror = foreign "pa_strerror" (int @-> returning string)
 let pa_context_notify_cb_t = pa_context @-> ptr void @-> returning void
 
 type pa_context_state_t =
@@ -263,8 +272,10 @@ let pa_sink_input_info_cb_t =
 ;;
 
 type pa_operation = unit ptr
+type pa_operation_opt = unit ptr
 
 let pa_operation : pa_operation typ = ptr void
+let pa_operation_opt : pa_operation_opt option typ = ptr_opt void
 let pa_operation_unref = foreign "pa_operation_unref" (pa_operation @-> returning void)
 
 type pa_operation_state_t =
@@ -292,7 +303,7 @@ let pa_context_get_sink_input_info =
      @-> uint32_t
      @-> funptr ~thread_registration:true ~runtime_lock:true pa_sink_input_info_cb_t
      @-> ptr void
-     @-> returning pa_operation)
+     @-> returning pa_operation_opt)
 ;;
 
 let pa_context_get_sink_input_info_list =
@@ -301,7 +312,7 @@ let pa_context_get_sink_input_info_list =
     (pa_context
      @-> funptr ~thread_registration:true ~runtime_lock:true pa_sink_input_info_cb_t
      @-> ptr void
-     @-> returning pa_operation)
+     @-> returning pa_operation_opt)
 ;;
 
 let pa_context_success_cb_t = pa_context @-> int @-> ptr void @-> returning void
@@ -358,7 +369,7 @@ let pa_context_subscribe =
      @-> pa_subscription_mask_t
      @-> funptr ~thread_registration:true ~runtime_lock:true pa_context_success_cb_t
      @-> ptr void
-     @-> returning pa_operation)
+     @-> returning pa_operation_opt)
 ;;
 
 let pa_context_set_sink_input_mute =
@@ -369,7 +380,7 @@ let pa_context_set_sink_input_mute =
      @-> bool
      @-> funptr ~thread_registration:true ~runtime_lock:true pa_context_success_cb_t
      @-> ptr void
-     @-> returning pa_operation)
+     @-> returning pa_operation_opt)
 ;;
 
 let pa_context_set_sink_input_volume =
@@ -380,5 +391,5 @@ let pa_context_set_sink_input_volume =
      @-> ptr Pa_cvolume.t
      @-> funptr ~thread_registration:true ~runtime_lock:true pa_context_success_cb_t
      @-> ptr void
-     @-> returning pa_operation)
+     @-> returning pa_operation_opt)
 ;;
