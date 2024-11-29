@@ -7,6 +7,7 @@ type sink_input_info_t =
   ; proplist : string String.Map.t
   ; volume : float list
   ; mute : bool
+  ; corked : bool
   }
 [@@deriving make]
 
@@ -34,6 +35,14 @@ let connect client_name =
   { mainloop; context }
 ;;
 
+let fail message errno =
+  let error = Bindings.pa_strerror errno in
+  raise (Pulse_error (Printf.sprintf "%s(%d): %s" message errno error))
+[@@inline]
+;;
+
+let check_error message ret = if ret <> 0 then fail message ret [@@inline]
+
 let wait_for_operation pulse operation =
   match operation with
   | Some operation ->
@@ -49,9 +58,8 @@ let wait_for_operation pulse operation =
     in
     loopy_loop ()
   | None ->
-    let error = Bindings.pa_context_errno pulse.context |> Bindings.pa_strerror in
     Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
-    raise @@ Pulse_error ("Failed to execute operation: " ^ error)
+    Bindings.pa_context_errno pulse.context |> fail "Failed to execute operation"
 ;;
 
 let context_success_cb pulse ok _ success _ =
@@ -86,9 +94,10 @@ let transform_sink_input_info info =
   let index = Unsigned.UInt32.to_int (getf info Bindings.Pa_sink_input_info.index)
   and name = getf info Bindings.Pa_sink_input_info.name
   and mute = getf info Bindings.Pa_sink_input_info.mute
-  and volume = read_volume (getf info Bindings.Pa_sink_input_info.volume)
+  and volume = getf info Bindings.Pa_sink_input_info.volume |> read_volume
+  and corked = getf info Bindings.Pa_sink_input_info.corked = 1
   and proplist = read_proplist (getf info Bindings.Pa_sink_input_info.proplist) in
-  make_sink_input_info_t ~index ~name ~volume ~mute ~proplist ()
+  make_sink_input_info_t ~index ~name ~volume ~mute ~corked ~proplist ()
 ;;
 
 let get_sink_input_by_index pulse index =
@@ -191,4 +200,103 @@ let subscribe pulse callback =
   Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
   if not !success then raise (Pulse_error "Failed to subscribe")
+;;
+
+let peak_detect_callback_table = Hashtbl.create (module Int)
+
+let sink_input_peak_detect pulse index ?(rate = 32) ?(fragsize = 8) callback =
+  let nsamples = fragsize / sizeof float in
+  Bindings.pa_threaded_mainloop_lock pulse.mainloop;
+  let stream =
+    let sample_spec = make Bindings.Pa_sample_spec.t in
+    setf
+      sample_spec
+      Bindings.Pa_sample_spec.format
+      (if Sys.big_endian then `PA_SAMPLE_FLOAT32BE else `PA_SAMPLE_FLOAT32LE);
+    setf sample_spec Bindings.Pa_sample_spec.rate (Unsigned.UInt32.of_int rate);
+    setf sample_spec Bindings.Pa_sample_spec.channels (Unsigned.UInt8.of_int 1);
+    Bindings.pa_stream_new
+      pulse.context
+      ("peak detect of #" ^ Int.to_string index)
+      (addr sample_spec)
+      (from_voidp Bindings.Pa_channel_map.t null)
+  in
+  let read_callback stream nbytes _ =
+    let nbytes = allocate size_t nbytes
+    and buff = allocate (ptr void) null in
+    Bindings.pa_stream_peek stream buff nbytes |> check_error "Failed to peek stream";
+    let nbytes = !@nbytes |> Unsigned.Size_t.to_int in
+    if nbytes <> fragsize
+    then
+      raise
+        (Pulse_error
+           (Printf.sprintf
+              "Received nbytes (%d) does not match fragsize(%d)"
+              nbytes
+              fragsize));
+    let samples = CArray.from_ptr ((coerce (ptr void) (ptr float)) !@buff) nsamples in
+    let peak =
+      Float.(
+        CArray.map float Float.abs samples
+        |> CArray.fold_left add 0.0
+        |> fun sum -> sum / of_int nsamples)
+    in
+    Bindings.pa_stream_drop stream |> check_error "Failed to drop stream";
+    callback peak
+  in
+  let state_callback stream _ =
+    let state = Bindings.pa_stream_get_state stream in
+    (match state with
+     | `PA_STREAM_FAILED | `PA_STREAM_TERMINATED ->
+       Hashtbl.remove peak_detect_callback_table index
+     | _ -> ());
+    Bindings.pa_threaded_mainloop_signal pulse.mainloop 0
+  in
+  let buf_attr = make Bindings.Pa_buffer_attr.t in
+  setf buf_attr Bindings.Pa_buffer_attr.fragsize (Unsigned.UInt32.of_int fragsize);
+  setf buf_attr Bindings.Pa_buffer_attr.maxlength (Unsigned.UInt32.of_int 1024);
+  Bindings.pa_stream_set_state_callback stream state_callback null;
+  Bindings.pa_stream_set_read_callback stream read_callback null;
+  let ret =
+    Bindings.pa_stream_connect_record
+      stream
+      (Some (string_of_int index))
+      (addr buf_attr)
+      ([| `PA_STREAM_DONT_MOVE; `PA_STREAM_PEAK_DETECT; `PA_STREAM_ADJUST_LATENCY |]
+       |> Array.map ~f:Bindings.pa_stream_flags_t_to_enum
+       |> Array.reduce_exn ~f:Int.bit_or)
+  in
+  if ret <> 0
+  then (
+    Bindings.pa_stream_unref stream;
+    Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
+    fail "Failed to connect stream" ret);
+  let rec loop () =
+    match Bindings.pa_stream_get_state stream with
+    | `PA_STREAM_UNCONNECTED | `PA_STREAM_CREATING ->
+      Bindings.pa_threaded_mainloop_wait pulse.mainloop;
+      loop ()
+    | `PA_STREAM_READY ->
+      Hashtbl.add_exn
+        peak_detect_callback_table
+        ~key:index
+        ~data:(read_callback, state_callback, stream)
+    | `PA_STREAM_TERMINATED -> Bindings.pa_stream_unref stream
+    | `PA_STREAM_FAILED ->
+      Bindings.pa_stream_unref stream;
+      Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
+      Bindings.pa_context_errno pulse.context
+      |> fail "Failed to create sink input peak detect"
+  in
+  loop ();
+  Bindings.pa_threaded_mainloop_unlock pulse.mainloop
+;;
+
+let sink_input_peak_detect_detach index =
+  match Hashtbl.find peak_detect_callback_table index with
+  | Some (_, _, stream) ->
+    let ret = Bindings.pa_stream_disconnect stream in
+    Bindings.pa_stream_unref stream;
+    if ret <> 0 then fail "Error while detaching" ret
+  | None -> raise (Pulse_error "Trying to detach non-existent Sink Input")
 ;;

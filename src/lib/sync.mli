@@ -4,6 +4,7 @@ type sink_input_info_t =
   ; proplist : string Core.String.Map.t
   ; volume : float list
   ; mute : bool
+  ; corked : bool
   }
 
 type t
@@ -26,3 +27,13 @@ val subscribe
       -> int
       -> unit)
   -> unit
+
+val sink_input_peak_detect
+  :  t
+  -> int
+  -> ?rate:int
+  -> ?fragsize:int
+  -> (float -> unit)
+  -> unit
+
+val sink_input_peak_detect_detach : int -> unit

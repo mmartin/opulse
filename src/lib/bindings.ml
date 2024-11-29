@@ -75,6 +75,7 @@ let pa_context_connect =
 let pa_context_errno = foreign "pa_context_errno" (pa_context @-> returning int)
 let pa_strerror = foreign "pa_strerror" (int @-> returning string)
 let pa_context_notify_cb_t = pa_context @-> ptr void @-> returning void
+let t_of_enum_exn f value = Option.value_exn (f value)
 
 type pa_context_state_t =
   [ `PA_CONTEXT_UNCONNECTED
@@ -86,8 +87,6 @@ type pa_context_state_t =
   | `PA_CONTEXT_TERMINATED
   ]
 [@@deriving enum, show { with_path = false }]
-
-let t_of_enum_exn f value = Option.value_exn (f value)
 
 let pa_context_state_t =
   Ctypes.view
@@ -208,6 +207,18 @@ module Pa_sample_spec = struct
   let format = field t "format" pa_sample_format_t
   let rate = field t "rate" uint32_t
   let channels = field t "channels" uint8_t
+  let () = seal t
+end
+
+module Pa_buffer_attr = struct
+  type t
+
+  let t : t structure typ = structure "pa_buffer_attr"
+  let maxlength = field t "maxlength" uint32_t
+  let tlength = field t "tlength" uint32_t
+  let prebuf = field t "prebuf" uint32_t
+  let minreq = field t "minreq" uint32_t
+  let fragsize = field t "fragsize" uint32_t
   let () = seal t
 end
 
@@ -396,4 +407,116 @@ let pa_context_set_sink_input_volume =
      @-> funptr ~thread_registration:true ~runtime_lock:true pa_context_success_cb_t
      @-> ptr void
      @-> returning pa_operation_opt)
+;;
+
+type pa_stream_state_t =
+  [ `PA_STREAM_UNCONNECTED
+  | `PA_STREAM_CREATING
+  | `PA_STREAM_READY
+  | `PA_STREAM_FAILED
+  | `PA_STREAM_TERMINATED
+  ]
+[@@deriving enum, show { with_path = false }]
+
+let pa_stream_state_t =
+  Ctypes.view
+    ~read:(t_of_enum_exn pa_stream_state_t_of_enum)
+    ~write:pa_stream_state_t_to_enum
+    Ctypes.int
+;;
+
+type pa_stream_flags_t =
+  [ `PA_STREAM_NOFLAGS [@value 0x0000]
+  | `PA_STREAM_START_CORKED [@value 0x0001]
+  | `PA_STREAM_INTERPOLATE_TIMING [@value 0x0002]
+  | `PA_STREAM_NOT_MONOTONIC [@value 0x0004]
+  | `PA_STREAM_AUTO_TIMING_UPDATE [@value 0x0008]
+  | `PA_STREAM_NO_REMAP_CHANNELS [@value 0x0010]
+  | `PA_STREAM_NO_REMIX_CHANNELS [@value 0x0020]
+  | `PA_STREAM_FIX_FORMAT [@value 0x0040]
+  | `PA_STREAM_FIX_RATE [@value 0x0080]
+  | `PA_STREAM_FIX_CHANNELS [@value 0x0100]
+  | `PA_STREAM_DONT_MOVE [@value 0x0200]
+  | `PA_STREAM_VARIABLE_RATE [@value 0x0400]
+  | `PA_STREAM_PEAK_DETECT [@value 0x0800]
+  | `PA_STREAM_START_MUTED [@value 0x1000]
+  | `PA_STREAM_ADJUST_LATENCY [@value 0x2000]
+  | `PA_STREAM_EARLY_REQUESTS [@value 0x4000]
+  | `PA_STREAM_DONT_INHIBIT_AUTO_SUSPEND [@value 0x8000]
+  | `PA_STREAM_START_UNMUTED [@value 0x10000]
+  | `PA_STREAM_FAIL_ON_SUSPEND [@value 0x20000]
+  | `PA_STREAM_RELATIVE_VOLUME [@value 0x40000]
+  | `PA_STREAM_PASSTHROUGH [@value 0x80000]
+  ]
+[@@deriving enum, show { with_path = false }]
+
+let pa_stream_flags_t =
+  Ctypes.view
+    ~read:(t_of_enum_exn pa_stream_flags_t_of_enum)
+    ~write:pa_stream_flags_t_to_enum
+    Ctypes.int
+;;
+
+type pa_stream = unit ptr
+
+let pa_stream : pa_stream typ = ptr void
+
+let pa_stream_new =
+  foreign
+    "pa_stream_new"
+    (pa_context
+     @-> string
+     @-> ptr Pa_sample_spec.t
+     @-> ptr Pa_channel_map.t
+     @-> returning pa_stream)
+;;
+
+let pa_stream_connect_record =
+  foreign
+    ~release_runtime_lock:true
+    "pa_stream_connect_record"
+    (pa_stream @-> string_opt @-> ptr Pa_buffer_attr.t @-> int @-> returning int)
+;;
+
+let pa_stream_request_cb_t = pa_stream @-> size_t @-> ptr void @-> returning void
+
+let pa_stream_set_read_callback =
+  foreign
+    "pa_stream_set_read_callback"
+    (pa_stream
+     @-> funptr ~thread_registration:true ~runtime_lock:true pa_stream_request_cb_t
+     @-> ptr void
+     @-> returning void)
+;;
+
+let pa_stream_notify_cb_t = pa_stream @-> ptr void @-> returning void
+
+let pa_stream_set_state_callback =
+  foreign
+    "pa_stream_set_state_callback"
+    (pa_stream
+     @-> funptr ~thread_registration:true ~runtime_lock:true pa_stream_notify_cb_t
+     @-> ptr void
+     @-> returning void)
+;;
+
+let pa_stream_set_suspended_callback =
+  foreign
+    "pa_stream_set_suspended_callback"
+    (pa_stream
+     @-> funptr ~thread_registration:true ~runtime_lock:true pa_stream_notify_cb_t
+     @-> ptr void
+     @-> returning void)
+;;
+
+let pa_stream_peek =
+  foreign "pa_stream_peek" (pa_stream @-> ptr (ptr void) @-> ptr size_t @-> returning int)
+;;
+
+let pa_stream_drop = foreign "pa_stream_drop" (pa_stream @-> returning int)
+let pa_stream_disconnect = foreign "pa_stream_disconnect" (pa_stream @-> returning int)
+let pa_stream_unref = foreign "pa_stream_unref" (pa_stream @-> returning void)
+
+let pa_stream_get_state =
+  foreign "pa_stream_get_state" (pa_stream @-> returning pa_stream_state_t)
 ;;
