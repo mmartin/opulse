@@ -38,10 +38,10 @@ let connect client_name =
 let fail message errno =
   let error = Bindings.pa_strerror errno in
   raise (Pulse_error (Printf.sprintf "%s(%d): %s" message errno error))
-[@@inline]
 ;;
 
-let check_error message ret = if ret <> 0 then fail message ret [@@inline]
+let failwith_context context message = Bindings.pa_context_errno context |> fail message
+let check_error message ret = if ret <> 0 then fail message ret
 
 let wait_for_operation pulse operation =
   match operation with
@@ -59,7 +59,7 @@ let wait_for_operation pulse operation =
     loopy_loop ()
   | None ->
     Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
-    Bindings.pa_context_errno pulse.context |> fail "Failed to execute operation"
+    failwith_context pulse.context "Failed to execute operation"
 ;;
 
 let context_success_cb pulse ok _ success _ =
@@ -160,7 +160,7 @@ let set_sink_input_volume pulse index ~volume ~channels =
   wait_for_operation pulse operation;
   Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
-  if not !success then raise (Pulse_error "Failed to set sink input volume")
+  if not !success then failwith_context pulse.context "Failed to set sink input volume"
 ;;
 
 let set_sink_input_mute pulse index mute =
@@ -178,7 +178,7 @@ let set_sink_input_mute pulse index mute =
   wait_for_operation pulse operation;
   Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
-  if not !success then raise (Pulse_error "Failed to set sink input mute")
+  if not !success then failwith_context pulse.context "Failed to set sink input mute"
 ;;
 
 let event_callback = ref (fun _ _ _ _ -> ())
@@ -199,7 +199,7 @@ let subscribe pulse callback =
   wait_for_operation pulse operation;
   Gc.keep_alive op_callback;
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
-  if not !success then raise (Pulse_error "Failed to subscribe")
+  if not !success then failwith_context pulse.context "Failed to subscribe"
 ;;
 
 let peak_detect_callback_table = Hashtbl.create (module Int)
@@ -285,8 +285,7 @@ let sink_input_peak_detect pulse index ?(rate = 32) ?(fragsize = 8) callback =
     | `PA_STREAM_FAILED ->
       Bindings.pa_stream_unref stream;
       Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
-      Bindings.pa_context_errno pulse.context
-      |> fail "Failed to create sink input peak detect"
+      failwith_context pulse.context "Failed to create sink input peak detect"
   in
   loop ();
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop
