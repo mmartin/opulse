@@ -242,20 +242,11 @@ let sink_input_peak_detect pulse index ?(rate = 32) ?(fragsize = 8) callback =
         |> fun sum -> sum / of_int nsamples)
     in
     Bindings.pa_stream_drop stream |> check_error "Failed to drop stream";
-    callback peak
-  in
-  let state_callback stream _ =
-    let state = Bindings.pa_stream_get_state stream in
-    (match state with
-     | `PA_STREAM_FAILED | `PA_STREAM_TERMINATED ->
-       Hashtbl.remove peak_detect_callback_table index
-     | _ -> ());
-    Bindings.pa_threaded_mainloop_signal pulse.mainloop 0
+    callback stream peak
   in
   let buf_attr = make Bindings.Pa_buffer_attr.t in
   setf buf_attr Bindings.Pa_buffer_attr.fragsize (Unsigned.UInt32.of_int fragsize);
   setf buf_attr Bindings.Pa_buffer_attr.maxlength (Unsigned.UInt32.of_int 1024);
-  Bindings.pa_stream_set_state_callback stream state_callback null;
   Bindings.pa_stream_set_read_callback stream read_callback null;
   let ret =
     Bindings.pa_stream_connect_record
@@ -271,31 +262,67 @@ let sink_input_peak_detect pulse index ?(rate = 32) ?(fragsize = 8) callback =
     Bindings.pa_stream_unref stream;
     Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
     fail "Failed to connect stream" ret);
-  let rec loop () =
-    match Bindings.pa_stream_get_state stream with
-    | `PA_STREAM_UNCONNECTED | `PA_STREAM_CREATING ->
-      Bindings.pa_threaded_mainloop_wait pulse.mainloop;
-      loop ()
-    | `PA_STREAM_READY ->
-      Hashtbl.add_exn
-        peak_detect_callback_table
-        ~key:index
-        ~data:(read_callback, state_callback, stream)
-    | `PA_STREAM_TERMINATED -> Bindings.pa_stream_unref stream
-    | `PA_STREAM_FAILED ->
-      Bindings.pa_stream_unref stream;
-      Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
-      failwith_context pulse.context "Failed to create sink input peak detect"
-  in
-  loop ();
+  Hashtbl.add_exn peak_detect_callback_table ~key:index ~data:(read_callback, stream);
   Bindings.pa_threaded_mainloop_unlock pulse.mainloop
 ;;
 
-let sink_input_peak_detect_detach index =
-  match Hashtbl.find peak_detect_callback_table index with
-  | Some (_, _, stream) ->
-    let ret = Bindings.pa_stream_disconnect stream in
-    Bindings.pa_stream_unref stream;
-    if ret <> 0 then fail "Error while detaching" ret
+let sink_input_peak_detect_detach pulse index =
+  match Hashtbl.find_and_remove peak_detect_callback_table index with
+  | Some (_, stream) ->
+    let rec loop_try_to_detach n =
+      Bindings.pa_threaded_mainloop_lock pulse.mainloop;
+      match Bindings.pa_stream_get_state stream with
+      (* If we attached to a sink_input which immediately got destroyed, the stream will hang in
+         PA_STREAM_CREATING state and will fail after a timeout (30 seconds). Instead of waiting
+         for timeout, we try to kill the source output. Unfortunately PulseAudio doesn't return
+         the index via `pa_stream_get_index` for streams in PA_STREAM_CREATING/PA_STREAM_FAILED
+         state, so we have to manually find id by matching name. :-( *)
+      | `PA_STREAM_CREATING | `PA_STREAM_FAILED ->
+        let source_output_index =
+          let result = ref None in
+          let op_callback _ info eol _ =
+            if eol = 0
+            then (
+              let info = !@info in
+              let info_index = getf info Bindings.Pa_source_output_info.index
+              and info_name = getf info Bindings.Pa_source_output_info.name in
+              if String.equal info_name ("peak detect of #" ^ Int.to_string index)
+              then result := Some info_index);
+            Bindings.pa_threaded_mainloop_signal pulse.mainloop 0
+          in
+          let operation =
+            Bindings.pa_context_get_source_output_info_list pulse.context op_callback null
+          in
+          wait_for_operation pulse operation;
+          Gc.keep_alive op_callback;
+          !result
+        in
+        (match source_output_index with
+         | Some source_output_index ->
+           let _ = Bindings.pa_stream_disconnect stream in
+           Bindings.pa_stream_unref stream;
+           let success = ref false in
+           let op_callback = context_success_cb pulse success in
+           let operation =
+             Bindings.pa_context_kill_source_output
+               pulse.context
+               source_output_index
+               op_callback
+               null
+           in
+           wait_for_operation pulse operation;
+           Gc.keep_alive op_callback;
+           Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
+           if not !success then failwith_context pulse.context "Error while detaching"
+         | None ->
+           Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
+           loop_try_to_detach (n + 1))
+      | _ ->
+        let ret = Bindings.pa_stream_disconnect stream in
+        Bindings.pa_stream_unref stream;
+        Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
+        if ret <> 0 then fail "Error while detaching" ret
+    in
+    loop_try_to_detach 0
   | None -> raise (Pulse_error "Trying to detach non-existent Sink Input")
 ;;

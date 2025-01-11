@@ -33,7 +33,7 @@ val sink_input_peak_detect
   -> int
   -> ?rate:int
   -> ?fragsize:int
-  -> (float -> unit)
+  -> (Bindings.pa_stream -> float -> unit)
   -> unit
 
-val sink_input_peak_detect_detach : int -> unit
+val sink_input_peak_detect_detach : t -> int -> unit

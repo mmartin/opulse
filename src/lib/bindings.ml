@@ -286,6 +286,35 @@ let pa_sink_input_info_cb_t =
   pa_context @-> ptr Pa_sink_input_info.t @-> int @-> ptr void @-> returning void
 ;;
 
+module Pa_source_output_info = struct
+  type t
+
+  let t : t structure typ = structure "pa_sink_input_info"
+  let index = field t "index" uint32_t
+  let name = field t "name" string
+  let owner_module = field t "owner_module" uint32_t
+  let client = field t "client" uint32_t
+  let source = field t "source" uint32_t
+  let sample_spec = field t "sample_spec" Pa_sample_spec.t
+  let channel_map = field t "channel_map" Pa_channel_map.t
+  let buffer_usec = field t "buffer_usec" pa_usec_t
+  let source_usec = field t "source_usec" pa_usec_t
+  let resample_method = field t "resample_method" string
+  let driver = field t "driver" string
+  let proplist = field t "proplist" pa_proplist_t
+  let corked = field t "corked" int
+  let volume = field t "volume" Pa_cvolume.t
+  let mute = field t "mute" bool
+  let has_volume = field t "has_volume" int
+  let volume_writable = field t "volume_writable" int
+  let format = field t "format" (ptr void)
+  let () = seal t
+end
+
+let pa_source_output_info_cb_t =
+  pa_context @-> ptr Pa_source_output_info.t @-> int @-> ptr void @-> returning void
+;;
+
 type pa_operation = unit ptr
 type pa_operation_opt = unit ptr
 
@@ -326,6 +355,15 @@ let pa_context_get_sink_input_info_list =
     "pa_context_get_sink_input_info_list"
     (pa_context
      @-> funptr ~thread_registration:true ~runtime_lock:true pa_sink_input_info_cb_t
+     @-> ptr void
+     @-> returning pa_operation_opt)
+;;
+
+let pa_context_get_source_output_info_list =
+  foreign
+    "pa_context_get_source_output_info_list"
+    (pa_context
+     @-> funptr ~thread_registration:true ~runtime_lock:true pa_source_output_info_cb_t
      @-> ptr void
      @-> returning pa_operation_opt)
 ;;
@@ -409,6 +447,16 @@ let pa_context_set_sink_input_volume =
      @-> returning pa_operation_opt)
 ;;
 
+let pa_context_kill_source_output =
+  foreign
+    "pa_context_kill_source_output"
+    (pa_context
+     @-> uint32_t
+     @-> funptr ~thread_registration:true ~runtime_lock:true pa_context_success_cb_t
+     @-> ptr void
+     @-> returning pa_operation_opt)
+;;
+
 type pa_stream_state_t =
   [ `PA_STREAM_UNCONNECTED
   | `PA_STREAM_CREATING
@@ -469,6 +517,16 @@ let pa_stream_new =
      @-> ptr Pa_sample_spec.t
      @-> ptr Pa_channel_map.t
      @-> returning pa_stream)
+;;
+
+let pa_stream_get_index = foreign "pa_stream_get_index" (pa_stream @-> returning uint32_t)
+
+let pa_stream_get_monitor_stream =
+  foreign "pa_stream_get_monitor_stream" (pa_stream @-> returning uint32_t)
+;;
+
+let pa_stream_get_device_index =
+  foreign "pa_stream_get_device_index" (pa_stream @-> returning uint32_t)
 ;;
 
 let pa_stream_connect_record =
