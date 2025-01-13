@@ -267,7 +267,7 @@ let sink_input_peak_detect pulse index ?(rate = 32) ?(fragsize = 8) callback =
 ;;
 
 let sink_input_peak_detect_detach pulse index =
-  match Hashtbl.find_and_remove peak_detect_callback_table index with
+  match Hashtbl.find peak_detect_callback_table index with
   | Some (_, stream) ->
     let rec loop_try_to_detach n =
       Bindings.pa_threaded_mainloop_lock pulse.mainloop;
@@ -323,6 +323,7 @@ let sink_input_peak_detect_detach pulse index =
         Bindings.pa_threaded_mainloop_unlock pulse.mainloop;
         if ret <> 0 then fail "Error while detaching" ret
     in
-    loop_try_to_detach 0
+    loop_try_to_detach 0;
+    Hashtbl.remove peak_detect_callback_table index
   | None -> raise (Pulse_error "Trying to detach non-existent Sink Input")
 ;;
